@@ -1,0 +1,9 @@
+# ------------------------------
+#   Git ignore File
+
+# Ignore object file
+/obj/*.o
+
+# Ignore built binary
+/crashdmesg
+
