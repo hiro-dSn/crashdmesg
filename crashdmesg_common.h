@@ -25,6 +25,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <elf.h>
+#include <time.h>
 
 
 /* --- Constant values --- */
@@ -40,7 +41,9 @@
 #define VMCOREINFO_MAX_SIZE 4096 /* Max size of vmcoreinfo.
                                     See:include/linux/kexec.h */
 #define MAX_SYMBOL_NAME 64 /* Symbol name size */
-#define OSRELEASE_LENGTH 256 /* Max buffer size of vmcore.osrelease */
+#define OSRELEASE_LENGTH 65 /* Size of "new_utsname.release"
+                               See:include/linux/utsname.h */
+#define CRASHTIME_LENGTH 20 /* Text size of decimal 2^64-1 */
 #define NOTETYPE_VMCOREINFO 0x00000000 /* Elf64_Nhdr.n_type */
 
 
@@ -85,6 +88,8 @@ int elf_read_load_int32(VMCore *vmcore, Elf64_Phdr *phdr_cache,
                         uint64_t vaddr, int32_t *ret);
 int elf_search_load_data(VMCore *vmcore, Elf64_Phdr *phdr_cache,
                          uint64_t vaddr, size_t size, off_t *ret);
+int elf_read_osrelease(VMCore *vmcore, char *buffer, size_t buffer_size);
+int elf_read_crashtime(VMCore *vmcore, time_t *crashtime);
 
 
 #endif /* ! CRASHDMESG_COMMON_H */

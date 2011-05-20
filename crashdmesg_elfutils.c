@@ -408,7 +408,7 @@ int elf_search_load_data(VMCore *vmcore, Elf64_Phdr *phdr_cache,
                          uint64_t vaddr, size_t size, off_t *ret)
 {
 	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_read_load_uin64:";
+	char estr[] = "[ERROR] elf_search_load_data:";
 	off_t ph_offset = 0;
 	int loop = 0;
 	
@@ -452,6 +452,108 @@ int elf_search_load_data(VMCore *vmcore, Elf64_Phdr *phdr_cache,
 	/* LOAD segment not found */
 	fprintf(stderr, "%s Data not found in LOAD segment.\n", estr);
 	return RETVAL_FAILURE;
+}
+
+
+/* ============================================================
+       elf_read_osrelease() - Search OSRELEASE string
+   ============================================================ */
+int elf_read_osrelease(VMCore *vmcore, char *buffer, size_t buffer_size)
+{
+	/* --- Variables --- */
+	char estr[] = "[ERROR] elf_read_osrelease:";
+	char *limit = NULL;
+	char *cursor = NULL;
+	int loop = 0;
+	
+	/* --- Assert check --- */
+	assert(vmcore != NULL);
+	assert(buffer != NULL);
+	assert(buffer_size > 0);
+	
+	/* Search "OSRELEASE=" */
+	if (elf_search_vmcoreinfo_key(vmcore, "OSRELEASE=", &cursor)) {
+		fprintf(stderr, "%s OSRELEASE not found.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	/* OSRELEASE is terminated by '\n', See:include/linux/kexec.h */
+	cursor += 10;
+	limit = vmcore->vmcoreinfo + vmcore->vmcoreinfo_size;
+	for (loop = 0; (loop <= buffer_size - 1) && (cursor < limit); loop++) {
+		buffer[loop] = *cursor;
+		if (*cursor == '\n') {
+			/* End of OSRELEASE */
+			buffer[loop] = 0x00;
+			return RETVAL_SUCCESS;
+		}
+		cursor++;
+	}
+	if (loop == buffer_size - 1) {
+		/* buffer overflow */
+		buffer[buffer_size - 1] = 0x00;
+		return RETVAL_SUCCESS;
+	}
+	if (cursor >= limit) {
+		/* Unexpected end of VMCOREINFO */
+		fprintf(stderr, "%s Unexpected end of VMCOREINFO.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	return RETVAL_FAILURE;
+}
+
+
+/* ============================================================
+       elf_read_crashtime() - Search CRASHTIME string
+   ============================================================ */
+int elf_read_crashtime(VMCore *vmcore, time_t *crashtime)
+{
+	/* --- Variables --- */
+	char estr[] = "[ERROR] elf_read_crashtime:";
+	char *limit = NULL;
+	char *cursor = NULL;
+	int loop = 0;
+	char buffer[CRASHTIME_LENGTH];
+	memset(buffer, 0x00, sizeof(buffer));
+	size_t buffer_size = 0;
+	
+	/* --- Assert check --- */
+	assert(vmcore != NULL);
+	assert(crashtime != NULL);
+	
+	/* Search "CRASHTIME=" */
+	if (elf_search_vmcoreinfo_key(vmcore, "CRASHTIME=", &cursor)) {
+		fprintf(stderr, "%s CRASHTIME not found.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	/* CRASHTIME may not be terminated by '\n', See:kernel/kexec.c */
+	buffer_size = sizeof(buffer);
+	cursor += 10;
+	limit = vmcore->vmcoreinfo + vmcore->vmcoreinfo_size;
+	for (loop = 0; (loop <= buffer_size - 1) && (cursor < limit); loop++) {
+		buffer[loop] = *cursor;
+		if (*cursor == 0x00) {
+			/* End of VMCOREINFO */
+			buffer[loop] = 0x00;
+			break;
+		}
+		cursor++;
+	}
+	if (loop == buffer_size - 1) {
+		/* buffer overflow */
+		buffer[buffer_size - 1] = 0x00;
+	}
+	
+	/* Convert text to long int */
+	*crashtime = strtoll(buffer, NULL, 10);
+	if (*crashtime == 0) {
+		fprintf(stderr, "%s Failed to convert value.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	return RETVAL_SUCCESS;
 }
 
 

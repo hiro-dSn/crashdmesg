@@ -91,6 +91,10 @@ static int crashdmesg(VMCore *vmcore)
 	int loop = 0;
 	Elf64_Phdr phdr_cache;
 	memset(&phdr_cache, 0x00, sizeof(Elf64_Phdr));
+	char osrelease[OSRELEASE_LENGTH];
+	memset(osrelease, 0x00, sizeof(osrelease));
+	time_t crashtime = 0;
+	struct tm *ct = NULL;
 
 	/* ringbuffer info from vmcoreinfo */
 	uint64_t log_buf_vaddr = 0;
@@ -131,6 +135,26 @@ static int crashdmesg(VMCore *vmcore)
 		fprintf(stderr, "%s Can not read VMCOREINFO.\n", estr);
 		goto ERROR_CLOSE;
 	}
+
+	/* Read additional informations */
+	if (elf_read_osrelease(vmcore, osrelease, sizeof(osrelease))) {
+		fprintf(stderr, "%s Can not read OSRELEASE.\n", estr);
+		goto ERROR_CLOSE;
+	}
+	fprintf(stdout, "%s:    * OS Release: %s\n", APP_NAME, osrelease);
+	if (elf_read_crashtime(vmcore, &crashtime)) {
+		fprintf(stderr, "%s Can not read CRASHTIME.\n", estr);
+		goto ERROR_CLOSE;
+	}
+	fprintf(stdout, "%s:    * Crash Time: %ld,\n", APP_NAME, crashtime);
+	ct = localtime(&crashtime);
+	if (ct == NULL) {
+		fprintf(stderr, "%s localtime failed.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	fprintf(stdout, "%s:                  %04d/%02d/%02d %02d:%02d:%02d\n",
+	        APP_NAME, ct->tm_year+1900, ct->tm_mon+1, ct->tm_mday,
+	        ct->tm_hour, ct->tm_min, ct->tm_sec);
 	
 	/* Read vaddr of ringbuffer */
 	fprintf(stdout, "%s:  Read Symbol from VMCOREINFO.\n", APP_NAME);
