@@ -10,29 +10,35 @@
 
 
 /* --- Prototypes --- */
-static int elf_parse_vmcoreinfo(uint8_t *cursor, uint8_t *limit,
-                                char *key, uint64_t *res);
+static int elf_search_vmcoreinfo(VMCore *vmcore,
+                                 off_t *offset, size_t *size);
+static int elf_search_note_segment(VMCore *vmcore,
+                                   off_t *offset, size_t *size);
 
 
 /* ============================================================
-       elf_validate_header() - Read ELF header and Validate
+       elf_validate_elfheader() - Read ELF header and Validate
    ============================================================ */
-int elf_validate_header(File *file, Elf64_Ehdr *header)
+int elf_validate_elfheader(VMCore *vmcore)
 {
 	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_validate_header:";
-	uint8_t valid_ident[EI_NIDENT] = {
+	char estr[] = "[ERROR] elf_validate_elfheader:";
+	uint8_t valid_ident[EI_NIDENT] = { 
 	    ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3,
 	    ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ELFOSABI_NONE,
 	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	Elf64_Ehdr *header = NULL;
 	
 	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(header != NULL);
+	assert(vmcore != NULL);
+	assert(vmcore->file.fdesc != 0);
+	
+	header = &vmcore->elf_header;
 	
 	/* Read ident from file */
-	if (file_read(file, (void*) header, 0, sizeof(Elf64_Ehdr))) {
-		fprintf(stderr, "%s Can not read ELF header from file.\n", estr);
+	if (file_read(&vmcore->file, (void*) header,
+	              0, sizeof(Elf64_Ehdr))) {
+		fprintf(stderr, "%s Can not read ELF header.\n", estr);
 		return RETVAL_FAILURE;
 	}
 	
@@ -56,185 +62,211 @@ int elf_validate_header(File *file, Elf64_Ehdr *header)
 
 
 /* ============================================================
-       elf_mmap_vmcore() - Mmap VMCore file
+       elf_read_vmcoreinfo() - Read VMCOREINFO
    ============================================================ */
-int elf_mmap_vmcore(File *file, uint8_t* *buffer)
+int elf_read_vmcoreinfo(VMCore *vmcore)
 {
 	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_mmap_vmcore:";
+	char estr[] = "[ERROR] elf_read_vmcoreinfo:";
+	off_t vmcoreinfo_offset = 0;
+	size_t vmcoreinfo_size = 0;
 	
 	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
+	assert(vmcore != NULL);
+	assert(vmcore->elf_header.e_ident[0] == ELFMAG0);
 	
-	if (file_mmap(file, (void**)buffer, 0, file->size)) {
-		fprintf(stderr, "%s Can not mmap input file.\n", estr);
+	/* Search VMCOREINFO */
+	if (elf_search_vmcoreinfo(vmcore, &vmcoreinfo_offset, &vmcoreinfo_size)) {
+		fprintf(stderr, "%s Can not find VMCOREINFO data.\n", estr);
 		return RETVAL_FAILURE;
 	}
+	
+	/* Read VMCOREINFO */
+	if (vmcoreinfo_size > sizeof(vmcore->vmcoreinfo)) {
+		fprintf(stderr, "%s VMCOREINFO is too big.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	if (file_read(&vmcore->file, (void*) vmcore->vmcoreinfo,
+	              vmcoreinfo_offset, vmcoreinfo_size)) {
+		fprintf(stderr, "%s Failed to read VMCOREINFO.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	vmcore->vmcoreinfo_size = vmcoreinfo_size;
 	
 	return RETVAL_SUCCESS;
 }
 
 
 /* ============================================================
-       elf_munmap_vmcore() - Munmap VMCore file
+       elf_search_vmcoreinfo() - Search VMCOREINFO text
    ============================================================ */
-int elf_munmap_vmcore(File *file, uint8_t* *buffer)
+static int elf_search_vmcoreinfo(VMCore *vmcore,
+                                 off_t *offset, size_t *size)
 {
 	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_munmap_vmcore:";
+	char estr[] = "[ERROR] elf_search_vmcoreinfo:";
+	off_t note_offset = 0;
+	size_t note_size = 0;
+	Elf64_Nhdr note_header;
+	memset(&note_header, 0x00, sizeof(Elf64_Nhdr));
+	off_t cursor = 0;
 	
 	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
+	assert(vmcore != NULL);
+	assert(vmcore->vmcoreinfo[0] == 0x00);
 	
-	if (file_munmap((void**)buffer, file->size)) {
-		fprintf(stderr, "%s Can not munmap input file.\n", estr);
+	if (elf_search_note_segment(vmcore, &note_offset, &note_size)) {
+		fprintf(stderr, "%s Can not find NOTE segment.\n", estr);
 		return RETVAL_FAILURE;
 	}
 	
-	return RETVAL_SUCCESS;
-}
-
-
-/* ============================================================
-       elf_search_note_section() - Search NOTE section
-   ============================================================ */
-int elf_search_note_section(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                            uint8_t* *note, size_t *size)
-{
-	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_search_note_section:";
-	uint16_t loop = 0;
-	Elf64_Phdr *phlist = NULL;
-	
-	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
-	assert(header != NULL);
-	assert(note != NULL);
-	assert(size != NULL);
-	
-	phlist = (Elf64_Phdr*) (buffer + header->e_phoff);
-	
-	/* Check buffer overflow */
-	if ((header->e_phoff > file->size) || (header->e_phoff +
-	     sizeof(Elf64_Phdr) * header->e_phnum > file->size)) {
-		fprintf(stderr, "%s Invalid program header size.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	
-	/* Search NOTE section */
-	for (loop = 0; loop < header->e_phnum; loop++) {
-		if (phlist[loop].p_type == PT_NOTE) {
-			/* NOTE section found */
-			if ( (phlist[loop].p_offset > file->size) ||
-			     (phlist[loop].p_offset + phlist[loop].p_filesz > file->size)) {
-				fprintf(stderr, "%s NOTE section found, but Invalid.\n", estr);
+	/* Parse NOTE segment */
+	for (cursor = note_offset; cursor < note_offset + note_size; ) {
+		if (file_read(&vmcore->file, (void*) &note_header,
+		              cursor, sizeof(Elf64_Nhdr))) {
+			fprintf(stderr, "%s Failed to read NOTE header.\n", estr);
+			return RETVAL_FAILURE;
+		}
+		if (note_header.n_type == NOTETYPE_VMCOREINFO) {
+			/* VMCOREINFO found */
+			*offset = cursor + sizeof(Elf64_Nhdr);
+			*offset += ((note_header.n_namesz + 3) / 4) * 4;
+			*size = note_header.n_descsz;
+			if ((*size <= 0) ||
+			    (*offset < note_offset) ||
+			    (*offset >= note_offset + note_size) ||
+			    (*offset + *size >= note_offset + note_size)) {
+				fprintf(stderr, "%s VMCOREINFO found, but invalid.\n", estr);
+				*offset = 0;
+				*size = 0;
 				return RETVAL_FAILURE;
 			}
-			*note = buffer + phlist[loop].p_offset; /* "*note" is NOT offset */
-			*size = phlist[loop].p_filesz;
 			return RETVAL_SUCCESS;
 		}
+		
+		/* Skip segment */
+		cursor += sizeof(Elf64_Nhdr);
+		cursor += ((note_header.n_namesz + 3) / 4) * 4;
+		cursor += ((note_header.n_descsz + 3) / 4) * 4;
 	}
-	fprintf(stderr, "%s NOTE section not found.\n", estr);
-	return RETVAL_FAILURE;
+
+	/* VMCOREINFO not found */
+	fprintf(stderr, "%s VMCOREINFO not found.\n", estr);
+	return RETVAL_SUCCESS;
 }
 
 
 /* ============================================================
-       elf_search_vmcoreinfo() - Search Symbol address
+       elf_search_note_segment() - Search NOTE segment
    ============================================================ */
-int elf_search_vmcoreinfo(uint8_t *note, size_t size, char *key, uint64_t *res)
+static int elf_search_note_segment(VMCore *vmcore,
+                                   off_t *offset, size_t *size)
 {
 	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_unmap_note_section:";
-	uint8_t *cursor = NULL;
-	uint8_t *limit = NULL;
+	char estr[] = "[ERROR] elf_search_note_segment:";
+	Elf64_Phdr pgm_header;
+	memset(&pgm_header, 0x00, sizeof(Elf64_Phdr));
+	off_t ph_offset = 0;
+	int loop = 0;
 	
 	/* --- Assert check --- */
-	assert(note != NULL);
-	assert(size > 0);
-	assert(key != NULL);
-	assert(res != NULL);
+	assert(vmcore != NULL);
+	assert(offset != NULL);
+	assert(size != NULL);
 	
-	/* Search "SYMBOL" */
-	limit = note + size;
-	for (cursor = note; cursor < limit; cursor++) {
-		if (*cursor == 'S') {
-			if (cursor + 6 < limit) {
-				if (! memcmp(cursor, "SYMBOL", 6)) {
-					if (! elf_parse_vmcoreinfo(cursor, limit, key, res)) {
-						/* "SYMBOL(key)" found */
-						return RETVAL_SUCCESS;
-					}
-				}
-			}
-			else {
-				/* Nearly end of buffer */
-				fprintf(stderr, "%s Symbol(%s) not found.\n", estr, key);
+	ph_offset = vmcore->elf_header.e_phoff;
+	for (loop = 0; loop < vmcore->elf_header.e_phnum; loop++) {
+		if (file_read(&vmcore->file, (void*) &pgm_header,
+		              ph_offset, sizeof(Elf64_Phdr))) {
+			fprintf(stderr, "%s Failed to read program header.\n", estr);
+			return RETVAL_FAILURE;
+		}
+		if (pgm_header.p_type == PT_NOTE) {
+			/* NOTE segment found */
+			*offset = pgm_header.p_offset;
+			*size = pgm_header.p_filesz;
+			if ((*offset < 0) || (*size <= 0) ||
+			    (*offset >= vmcore->file.size) ||
+			    (*offset + *size >= vmcore->file.size)) {
+				fprintf(stderr, "%s NOTE segment found, but invalid.\n", estr);
+				*offset = 0;
+				*size = 0;
 				return RETVAL_FAILURE;
 			}
+			return RETVAL_SUCCESS;
 		}
+		ph_offset += vmcore->elf_header.e_phentsize;
 	}
-	/* "SYMBOL" not found */
-	fprintf(stderr, "%s Symbol(%s) not found.\n", estr, key);
+	
+	/* NOTE segment not found */
+	fprintf(stderr, "%s NOTE segment not found.\n", estr);
 	return RETVAL_FAILURE;
 }
 
 
 /* ============================================================
-       elf_parse_vmcoreinfo() - Parse text "SYMBOL(key)=addr\n"
+       elf_search_vmcoreinfo_symbol() - Return Symbol value
    ============================================================ */
-static int elf_parse_vmcoreinfo(uint8_t *cursor, uint8_t *limit,
-                                char *key, uint64_t *res)
+int elf_search_vmcoreinfo_symbol(VMCore *vmcore, char *key, uint64_t *ret)
 {
 	/* --- Variables --- */
-	size_t keysize = 0;
-	char buffer[17];
-	memset(buffer, 0x00, sizeof(buffer));
+	char estr[] = "[ERROR] elf_search_vmcoreinfo_symbol:";
+	int key_length = 0;
+	char search_key[MAX_SYMBOL_NAME];
+	memset(search_key, 0x00, sizeof(search_key));
+	char addrtext[17];
+	memset(addrtext, 0x00, sizeof(addrtext));
+	char *cursor = 0;
+	char *limit = 0;
 	
 	/* --- Assert check --- */
-	assert(cursor != NULL);
-	assert(limit > cursor);
-	assert(key != NULL);
-	assert(res != NULL);
+	assert(vmcore != NULL);
+	assert(ret != NULL);
 	
-	keysize = strlen(key);
-	cursor += 7; /* "SYMBOL(" */
-	if (cursor + keysize + 2 >= limit) {
-		/* Can not search key */
+	/* Build search key */
+	key_length = strlen(key);
+	cursor = search_key;
+	if (key_length + 9 >= sizeof(search_key)) {
+		fprintf(stderr, "%s Search key \"%s\" is too big.\n", estr, key);
 		return RETVAL_FAILURE;
 	}
-	if (memcmp(cursor, key, keysize) || memcmp(cursor + keysize, ")=", 2)) {
-		/* Not match key */
+	memcpy(cursor, "SYMBOL(", 7);
+	cursor += 7;
+	memcpy(cursor, key, key_length);
+	cursor += key_length;
+	memcpy(cursor, ")=", 2);
+	*(cursor + 2) = 0x00;
+	
+	/* Search "SYMBOL(key)=" */
+	if (elf_search_vmcoreinfo_key(vmcore, search_key, &cursor)) {
+		fprintf(stderr, "%s Failed to serarch \"%s\" in VMCOREINFO",
+		        estr, search_key);
 		return RETVAL_FAILURE;
 	}
 	
-	/* key found and parse address */
-	cursor += keysize + 2; /* skip key and ")=" */
-	if (cursor + 16 >= limit) {
-		/* No space for address */
+	/* Read value */
+	limit = vmcore->vmcoreinfo + vmcore->vmcoreinfo_size;
+	cursor += strlen(search_key);
+	if (cursor + sizeof(addrtext) >= limit) {
+		fprintf(stderr, "%s Can not read value.\n", estr);
 		return RETVAL_FAILURE;
 	}
-	
-	/* Copy address text to buffer */
-	memcpy(buffer, cursor, 17);
-	if (buffer[16] != 0x00) {
-		if (buffer[16] == '\n') {
-			buffer[16] = 0x00;
+	memcpy(addrtext, cursor, sizeof(addrtext));
+	if (addrtext[16] != 0x00) {
+		if (addrtext[16] == '\n') {
+			addrtext[16] = 0x00;
 		}
 		else {
 			/* Invalid text */
+			fprintf(stderr, "%s Can not read value.\n", estr);
 			return RETVAL_FAILURE;
 		}
 	}
 	
 	/* Convert text to addr */
-	*res = strtoull(buffer, NULL, 16);
-	if (*res == 0) {
-		/* strtoull failed */
+	*ret = strtoull(addrtext, NULL, 16);
+	if (*ret == 0) {
+		fprintf(stderr, "%s Failed to convert value.\n", estr);
 		return RETVAL_FAILURE;
 	}
 	
@@ -243,140 +275,182 @@ static int elf_parse_vmcoreinfo(uint8_t *cursor, uint8_t *limit,
 
 
 /* ============================================================
-       elf_read_uint64_from_load() - Read uint64_t value
+       elf_search_vmcoreinfo_key() - Search and return offset
    ============================================================ */
-int elf_read_uint64_from_load(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                              uint64_t vaddr, uint64_t *ret)
+int elf_search_vmcoreinfo_key(VMCore *vmcore, char *key, char* *ptr)
 {
 	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_read_uint64_from_load:";
-	uint64_t *value = 0;
+	char estr[] = "[ERROR] elf_search_vmcoreinfo_symbol:";
+	int key_length = 0;
+	char *cursor = NULL;
+	char *limit = NULL;
 	
 	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
-	assert(header != NULL);
-	assert(ret != NULL);
-	assert(vaddr > 0);
+	assert(vmcore != NULL);
+	assert(key != NULL);
+	assert(ptr != NULL);
 	
-	if (elf_read_load_section(file, buffer, header, vaddr,
-	                          8, (uint8_t**) &value)) {
-		fprintf(stderr, "%s Can not read value.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	
-	*ret = *value;
-	return RETVAL_SUCCESS;
-}
-
-
-/* ============================================================
-       elf_read_uint32_from_load() - Read uint32_t value
-   ============================================================ */
-int elf_read_uint32_from_load(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                              uint64_t vaddr, uint32_t *ret)
-{
-	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_read_uint64_from_load:";
-	uint32_t *value = 0;
-	
-	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
-	assert(header != NULL);
-	assert(ret != NULL);
-	assert(vaddr > 0);
-	
-	if (elf_read_load_section(file, buffer, header, vaddr,
-	                          4, (uint8_t**) &value)) {
-		fprintf(stderr, "%s Can not read value.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	
-	*ret = *value;
-	return RETVAL_SUCCESS;
-}
-
-
-/* ============================================================
-       elf_read_int32_from_load() - Read int32_t value
-   ============================================================ */
-int elf_read_int32_from_load(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                              uint64_t vaddr, int32_t *ret)
-{
-	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_read_uint64_from_load:";
-	int32_t *value = NULL;
-	
-	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
-	assert(header != NULL);
-	assert(ret != NULL);
-	assert(vaddr > 0);
-	
-	if (elf_read_load_section(file, buffer, header, vaddr,
-	                          4, (uint8_t**) &value)) {
-		fprintf(stderr, "%s Can not read value.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	
-	*ret = *value;
-	return RETVAL_SUCCESS;
-}
-
-
-/* ============================================================
-       elf_read_load_section() - Read LOAD section
-   ============================================================ */
-int elf_read_load_section(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                          uint64_t vaddr, size_t size, uint8_t* *ret)
-{
-	/* --- Variables --- */
-	char estr[] = "[ERROR] elf_read_load_section:";
-	uint16_t loop = 0;
-	Elf64_Phdr *phlist = NULL;
-	
-	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
-	assert(header != NULL);
-	assert(ret != NULL);
-	assert(vaddr > 0);
-	assert(size > 0);
-	
-	phlist = (Elf64_Phdr*) (buffer + header->e_phoff);
-	
-	/* Check buffer overflow */
-	if ((header->e_phoff > file->size) || (header->e_phoff +
-	     sizeof(Elf64_Phdr) * header->e_phnum > file->size)) {
-		fprintf(stderr, "%s Invalid program header size.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	
-	/* Search LOAD section */
-	for (loop = 0; loop < header->e_phnum; loop++) {
-		if (phlist[loop].p_type == PT_LOAD) {
-			/* LOAD section found */
-			if ( (phlist[loop].p_offset > file->size) ||
-			     (phlist[loop].p_offset + phlist[loop].p_filesz > file->size)) {
-				fprintf(stderr, "%s LOAD section found, but Invalid.\n", estr);
-				return RETVAL_FAILURE;
+	key_length = strlen(key);
+	limit = vmcore->vmcoreinfo + vmcore->vmcoreinfo_size;
+	for (cursor = vmcore->vmcoreinfo; cursor <  limit; cursor++) {
+		if (*cursor == key[0]) {
+			if (cursor + key_length < limit) {
+				if (! memcmp(cursor, key, key_length)) {
+					*ptr = cursor;
+					return RETVAL_SUCCESS;
+				}
 			}
-			
-			if ( (vaddr >= phlist[loop].p_vaddr) &&
-			     (vaddr < phlist[loop].p_vaddr + phlist[loop].p_filesz) &&
-			     (vaddr + size >= phlist[loop].p_vaddr) &&
-			     (vaddr + size < phlist[loop].p_vaddr +
-			                     phlist[loop].p_filesz) ) {
-				/* phlist[loop] contain target data */
-				*ret = (uint8_t*) buffer + phlist[loop].p_offset +
-				       vaddr - phlist[loop].p_vaddr;
-				return RETVAL_SUCCESS;
+			else {
+				/* Nearly end of buffer */
+				goto ERROR_NOTFOUND;
 			}
 		}
 	}
-	fprintf(stderr, "%s LOAD section not found.\n", estr);
+	
+ERROR_NOTFOUND:
+	/* key not found */
+	fprintf(stderr, "%s Key(%s) not found in VMCOREINFO.\n", estr, key);
+	return RETVAL_FAILURE;
+}
+
+
+/* ============================================================
+       elf_read_load_uint64() - Read uint64_t value from LOAD
+   ============================================================ */
+int elf_read_load_uint64(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                         uint64_t vaddr, uint64_t *ret)
+{
+	/* --- Variables --- */
+	char estr[] = "[ERROR] elf_read_load_uint64:";
+	off_t ret_offset = 0;
+	
+	/* --- Assert check --- */
+	assert(vmcore != NULL);
+	assert(phdr_cache != NULL);
+	
+	/* Search and Read */
+	if (elf_search_load_data(vmcore, phdr_cache,
+	                         vaddr, sizeof(uint64_t), &ret_offset)) {
+		fprintf(stderr, "%s Can not find data.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	if (file_read(&vmcore->file, (void*) ret, ret_offset, sizeof(uint64_t))) {
+		fprintf(stderr, "%s Can not read data from file.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	return RETVAL_SUCCESS;
+}
+
+
+/* ============================================================
+       elf_read_load_uint32() - Read uint32_t value from LOAD
+   ============================================================ */
+int elf_read_load_uint32(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                         uint64_t vaddr, uint32_t *ret)
+{
+	/* --- Variables --- */
+	char estr[] = "[ERROR] elf_read_load_uint32:";
+	off_t ret_offset = 0;
+	
+	/* --- Assert check --- */
+	assert(vmcore != NULL);
+	assert(phdr_cache != NULL);
+	
+	/* Search and Read */
+	if (elf_search_load_data(vmcore, phdr_cache,
+	                         vaddr, sizeof(uint32_t), &ret_offset)) {
+		fprintf(stderr, "%s Can not find data.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	if (file_read(&vmcore->file, (void*) ret, ret_offset, sizeof(uint32_t))) {
+		fprintf(stderr, "%s Can not read data from file.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	return RETVAL_SUCCESS;
+}
+
+
+/* ============================================================
+       elf_read_load_int32() - Read int32_t value from LOAD
+   ============================================================ */
+int elf_read_load_int32(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                        uint64_t vaddr, int32_t *ret)
+{
+	/* --- Variables --- */
+	char estr[] = "[ERROR] elf_read_load_int32:";
+	off_t ret_offset = 0;
+	
+	/* --- Assert check --- */
+	assert(vmcore != NULL);
+	assert(phdr_cache != NULL);
+	
+	/* Search and Read */
+	if (elf_search_load_data(vmcore, phdr_cache,
+	                         vaddr, sizeof(int32_t), &ret_offset)) {
+		fprintf(stderr, "%s Can not find data.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	if (file_read(&vmcore->file, (void*) ret, ret_offset, sizeof(int32_t))) {
+		fprintf(stderr, "%s Can not read data from file.\n", estr);
+		return RETVAL_FAILURE;
+	}
+	
+	return RETVAL_SUCCESS;
+}
+
+
+/* ============================================================
+       elf_search_load_data() - Search data and return file offset
+   ============================================================ */
+int elf_search_load_data(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                         uint64_t vaddr, size_t size, off_t *ret)
+{
+	/* --- Variables --- */
+	char estr[] = "[ERROR] elf_read_load_uin64:";
+	off_t ph_offset = 0;
+	int loop = 0;
+	
+	/* --- Assert check --- */
+	assert(vmcore != NULL);
+	assert(phdr_cache != NULL);
+	assert(ret != NULL);
+	assert(size > 0);
+	
+	/* Search LOAD segment, use cache first */
+	if ((phdr_cache->p_type == PT_LOAD) && (phdr_cache->p_offset > 0) &&
+	    (phdr_cache->p_vaddr > 0) && (phdr_cache->p_filesz > 0)) {
+		/* Program header cache is valid */
+		if ((vaddr >= phdr_cache->p_vaddr) &&
+		    (vaddr + size < phdr_cache->p_vaddr + phdr_cache->p_filesz)) {
+			/* return data offset in file */
+			*ret = phdr_cache->p_offset + vaddr - phdr_cache->p_vaddr;
+			return RETVAL_SUCCESS;
+		}
+	}
+	
+	/* Search each LOAD segment */
+	ph_offset = vmcore->elf_header.e_phoff;
+	for (loop = 0; loop < vmcore->elf_header.e_phnum; loop++) {
+		if (file_read(&vmcore->file, (void*) phdr_cache,
+		    ph_offset, sizeof(Elf64_Phdr))) {
+			fprintf(stderr, "%s Failed to read program header.\n", estr);
+			return RETVAL_FAILURE;
+		}
+		if (phdr_cache->p_type == PT_LOAD) {
+			/* LOAD segment found */
+			if ((vaddr >= phdr_cache->p_vaddr) &&
+			    (vaddr + size < phdr_cache->p_vaddr + phdr_cache->p_filesz)) {
+				*ret = phdr_cache->p_offset + vaddr - phdr_cache->p_vaddr;
+				return RETVAL_SUCCESS;
+			}
+		}
+		ph_offset += vmcore->elf_header.e_phentsize;
+	}
+	
+	/* LOAD segment not found */
+	fprintf(stderr, "%s Data not found in LOAD segment.\n", estr);
 	return RETVAL_FAILURE;
 }
 

@@ -37,6 +37,11 @@
 
 #define DEFAULT_VMCORE "/proc/vmcore"
 #define MAX_LOGBUF_LIMIT 1048576 /* 1MB */
+#define VMCOREINFO_MAX_SIZE 4096 /* Max size of vmcoreinfo.
+                                    See:include/linux/kexec.h */
+#define MAX_SYMBOL_NAME 64 /* Symbol name size */
+#define OSRELEASE_LENGTH 256 /* Max buffer size of vmcore.osrelease */
+#define NOTETYPE_VMCOREINFO 0x00000000 /* Elf64_Nhdr.n_type */
 
 
 /* --- Data structures --- */
@@ -48,27 +53,38 @@ typedef struct {
 	size_t size;
 } File;
 
+/* Keep file descriptor and vmcore information */
+typedef struct {
+	File file;
+	Elf64_Ehdr elf_header;
+	char vmcoreinfo[VMCOREINFO_MAX_SIZE];
+	size_t vmcoreinfo_size; /* vmcoreinfo real size */
+	char *osrelease[OSRELEASE_LENGTH];
+	size_t osrelease_size; /* osrelease real size */
+	time_t crashtime; /* CRASHTIME value [sec] */
+	uint64_t log_buf; /* log_buf [virtual address] */
+	uint64_t log_end; /* log_end [virtual address] */
+	int32_t log_buf_len; /* log_buf_len [size] */
+	uint32_t logged_chars; /* logged_chars [size] */
+} VMCore;
+
 
 /* --- Common Prototypes --- */
 int file_open(File *file);
 int file_close(File *file);
 int file_read(File *file, void *buffer, off_t offset, size_t size);
-int file_mmap(File *file, void* *buffer, off_t offset, size_t size);
-int file_munmap(void* *buffer, size_t size);
-int elf_validate_header(File *file, Elf64_Ehdr *header);
-int elf_mmap_vmcore(File *file, uint8_t* *buffer);
-int elf_munmap_vmcore(File *file, uint8_t* *buffer);
-int elf_search_note_section(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                            uint8_t* *note, size_t *size);
-int elf_search_vmcoreinfo(uint8_t *note, size_t size, char *key, uint64_t *res);
-int elf_read_uint64_from_load(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                              uint64_t vaddr, uint64_t *ret);
-int elf_read_uint32_from_load(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                              uint64_t vaddr, uint32_t *ret);
-int elf_read_int32_from_load(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                              uint64_t vaddr, int32_t *ret);
-int elf_read_load_section(File *file, uint8_t *buffer, Elf64_Ehdr *header,
-                          uint64_t vaddr, size_t size, uint8_t* *ret);
+int elf_validate_elfheader(VMCore *vmcore);
+int elf_read_vmcoreinfo(VMCore *vmcore);
+int elf_search_vmcoreinfo_symbol(VMCore *vmcore, char *key, uint64_t *ret);
+int elf_search_vmcoreinfo_key(VMCore *vmcore, char *key, char* *ptr);
+int elf_read_load_uint64(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                         uint64_t vaddr, uint64_t *ret);
+int elf_read_load_uint32(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                         uint64_t vaddr, uint32_t *ret);
+int elf_read_load_int32(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                        uint64_t vaddr, int32_t *ret);
+int elf_search_load_data(VMCore *vmcore, Elf64_Phdr *phdr_cache,
+                         uint64_t vaddr, size_t size, off_t *ret);
 
 
 #endif /* ! CRASHDMESG_COMMON_H */
