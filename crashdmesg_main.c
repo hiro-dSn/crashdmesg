@@ -213,6 +213,7 @@ static int crashdmesg(VMCore *vmcore)
 		fprintf(stderr, "%s Can not allocate memory.\n", estr);
 		goto ERROR_CLOSE;
 	}
+	memset(ringbuffer, 0x00, log_buf_len);
 	
 	/* Calculate Dump address */
 	fprintf(stdout, "%s:  Calculating dump area address.\n", APP_NAME);
@@ -238,7 +239,7 @@ static int crashdmesg(VMCore *vmcore)
 		fprintf(stdout, "%s:  Dump ring buffer.\n", APP_NAME);
 		fprintf(stdout,
 		        ">>>>>>>>>>[ START kernel ring buffer ]>>>>>>>>>>>>>>>>>\n");
-		for (loop = 0; loop < log_buf_len; loop++) {
+		for (loop = 0; loop < logged_chars; loop++) {
 		     fputc(ringbuffer[loop], stdout);
 		}
 		fprintf(stdout,

@@ -34,7 +34,7 @@
 
 #define APP_NAME "crashdmesg"
 #define APP_FULLNAME "VMCore Kernel Ring Buffer Dumper"
-#define APP_VERSION "0.9"
+#define APP_VERSION "0.9.1"
 
 #define DEFAULT_VMCORE "/proc/vmcore"
 #define MAX_LOGBUF_LIMIT 1048576 /* 1MB */

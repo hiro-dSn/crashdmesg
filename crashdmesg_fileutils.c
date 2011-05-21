@@ -35,14 +35,14 @@ int file_open(File *file)
 	
 	/* Get stat and Open */
 	if (stat(file->filename, &filestat) == -1) {
-		fprintf(stderr, "%s Get file stat failed: %s : %s\n", estr,
-		        file->filename, strerror(errno));
+		fprintf(stderr, "%s Get file stat failed: [%d] %s: %s\n", estr,
+		        errno, strerror(errno), file->filename);
 		return RETVAL_FAILURE;
 	}
 	file->fdesc = open(file->filename, O_RDONLY|O_LARGEFILE);
 	if (file->fdesc == -1) {
-		fprintf(stderr, "%s Can not open file: %s : %s\n", estr,
-		       file->filename, strerror(errno));
+		fprintf(stderr, "%s Can not open file: [%d] %s: %s\n", estr,
+		       errno, strerror(errno), file->filename);
 		file->fdesc = 0;
 		return RETVAL_FAILURE;
 	}
@@ -72,8 +72,8 @@ int file_close(File *file)
 	
 	/* Close */
 	if (close(file->fdesc) == -1) {
-		fprintf(stderr, "%s Can not close file: %s : %s\n", estr,
-		       file->filename, strerror(errno));
+		fprintf(stderr, "%s Can not close file: [%d] %s: %s\n", estr,
+		       errno, strerror(errno), file->filename);
 		file->fdesc = 0;
 		file->size = 0;
 		return RETVAL_FAILURE;
@@ -111,104 +111,28 @@ int file_read(File *file, void *buffer, off_t offset, size_t size)
 	
 	/* Seek to offset */
 	if (lseek(file->fdesc, offset, SEEK_SET) == (off_t) -1) {
-		fprintf(stderr, "%s Seek failed: %s(0x%x) : %s\n", estr,
-		        file->filename, (unsigned) offset, strerror(errno));
+		fprintf(stderr, "%s Seek failed: %s(0x%x) : [%d] %s\n", estr,
+		        file->filename, (unsigned) offset, errno, strerror(errno));
 		return RETVAL_FAILURE;
 	}
 	
 	/* Read */
 	readbytes = read(file->fdesc, buffer, size);
 	if (readbytes ==  -1) {
-		fprintf(stderr, "%s Read failed: %s(0x%x:0x%x) : %s\n", estr,
+		fprintf(stderr, "%s Read failed: %s(0x%x:0x%x) : [%d] %s\n", estr,
 		        file->filename, (unsigned) offset, (unsigned) size,
-		        strerror(errno));
+		        errno, strerror(errno));
 		return RETVAL_FAILURE;
 	}
 	else if (readbytes != (ssize_t) size) {
-		fprintf(stderr, "%s Can not read: %s(0x%x:0x%x,0x%x) : %s\n", estr,
-		        file->filename, (unsigned) offset, (unsigned) size,
-		        (unsigned) readbytes, strerror(errno));
+		fprintf(stderr, "%s Can not read: %s(0x%x:0x%x,0x%x) : [%d] %s\n",
+		        estr, file->filename, (unsigned) offset, (unsigned) size,
+		        (unsigned) readbytes, errno, strerror(errno));
 		return RETVAL_FAILURE;
 	}
 	
 	return RETVAL_SUCCESS;
 }
 
-
-/* ============================================================
-       file_mmap() - Do file mmap
-   ============================================================ */
-int file_mmap(File *file, void* *buffer, off_t offset, size_t size)
-{
-	/* --- Variables --- */
-	errno = 0;
-	char estr[] = "[ERROR] file_mmap:";
-	void *mapped_addr = NULL;
-	
-	/* --- Assert check --- */
-	assert(file != NULL);
-	assert(buffer != NULL);
-	assert(offset >= 0);
-	assert(size > 0);
-	
-	/* Check file and pointer */
-	if (! file->fdesc) {
-		fprintf(stderr, "%s File is not opened.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	if (*buffer != NULL) {
-		fprintf(stderr, "%s Pointer already used or mmapped.\n", estr);
-		return RETVAL_FAILURE;
-	}
-	if ((offset > file->size) || (offset + size > file->size)) {
-		fprintf(stderr, "%s Mmap area overflowed: %s(0x%x,0x%x:0x%x)\n", estr,
-		        file->filename, (unsigned) file->size, (unsigned) offset,
-		        (unsigned) size);
-		return RETVAL_FAILURE;
-	}
-	
-	/* mmap */
-	mapped_addr = mmap(NULL, size, PROT_READ, MAP_SHARED,
-	                              file->fdesc, offset);
-	if (mapped_addr == (void*) MAP_FAILED) {
-		fprintf(stderr, "%s Mmap failed: %s(0x%x:0x%x) : %s\n", estr,
-		       file->filename, (unsigned) offset, (unsigned) size,
-		       strerror(errno));
-		return RETVAL_FAILURE;
-	}
-	
-	*buffer = mapped_addr;
-	return RETVAL_SUCCESS;
-}
-
-
-/* ============================================================
-       file_munmap() - Do file munmap
-   ============================================================ */
-int file_munmap(void* *buffer, size_t size)
-{
-	/* --- Variables --- */
-	errno = 0;
-	char estr[] = "[ERROR] file_munmap:";
-	
-	/* --- Assert check --- */
-	assert(buffer != NULL);
-	assert(size > 0);
-	
-	/* Check pointer */
-	if (*buffer == NULL) {
-		fprintf(stderr, "Invalid pointer.\n");
-		return RETVAL_FAILURE;
-	}
-	
-	/* Munmap */
-	if (munmap(*buffer, size) == -1) {
-		fprintf(stderr, "%s Munmap failed: %s\n", estr, strerror(errno));
-		*buffer = NULL;
-		return RETVAL_FAILURE;
-	}
-	
-	return RETVAL_SUCCESS;
-}
 
 /* ====================================================================== */
