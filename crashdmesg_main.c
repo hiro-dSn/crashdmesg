@@ -102,12 +102,6 @@ static int crashdmesg(VMCore *vmcore)
 	uint64_t log_buf_len_vaddr = 0;
 	uint64_t logged_chars_vaddr = 0;
 	
-	/* ringbuffer address and size */
-	uint64_t log_buf = 0;
-	uint32_t log_end = 0;
-	int32_t log_buf_len = 0;
-	uint32_t logged_chars = 0;
-	
 	/* Pointer of ring buffer */
 	off_t ringbuffer1 = 0; /* file offset */
 	uint32_t ringbuffer1_size = 0;
@@ -180,48 +174,49 @@ static int crashdmesg(VMCore *vmcore)
 	fprintf(stdout, "%s:  Read LOAD section about Ring buffer..\n",
 	        APP_NAME);
 	elf_read_load_uint64(vmcore, &phdr_cache,
-	                     log_buf_vaddr, &log_buf);
+	                     log_buf_vaddr, &vmcore->log_buf);
 	elf_read_load_uint32(vmcore, &phdr_cache,
-	                     log_end_vaddr, &log_end);
+	                     log_end_vaddr, &vmcore->log_end);
 	elf_read_load_int32(vmcore, &phdr_cache,
-	                    log_buf_len_vaddr, &log_buf_len);
+	                    log_buf_len_vaddr, &vmcore->log_buf_len);
 	elf_read_load_uint32(vmcore, &phdr_cache,
-	                     logged_chars_vaddr, &logged_chars);
-	if ((! log_buf) || (! log_end) ||
-	    (! log_buf_len) || (! logged_chars)) {
+	                     logged_chars_vaddr, &vmcore->logged_chars);
+	if ((! vmcore->log_buf) || (! vmcore->log_end) ||
+	    (! vmcore->log_buf_len) || (! vmcore->logged_chars)) {
 		fprintf(stderr, "%s Can not read value from LOAD segment.\n", estr);
 		goto ERROR_CLOSE;
 	}
 	fprintf(stdout, "%s:    * log_buf:      0x%016lx\n",
-	        APP_NAME, log_buf);
+	        APP_NAME, vmcore->log_buf);
 	fprintf(stdout, "%s:    * log_end:              0x%08x\n",
-	        APP_NAME, log_end);
+	        APP_NAME, vmcore->log_end);
 	fprintf(stdout, "%s:    * log_buf_len:          0x%08x\n",
-	        APP_NAME, log_buf_len);
+	        APP_NAME, vmcore->log_buf_len);
 	fprintf(stdout, "%s:    * logged_chars:         0x%08x\n",
-	        APP_NAME, logged_chars);
+	        APP_NAME, vmcore->logged_chars);
 
 	/* Check log_buf size for safety */
-	if (log_buf_len > MAX_LOGBUF_LIMIT) {
+	if (vmcore->log_buf_len > MAX_LOGBUF_LIMIT) {
 		fprintf(stderr, "%s log_buf_len is too big.\n", estr);
 		goto ERROR_CLOSE;
 	}
 
 	/* Allocate memory for ring buffer */
-	ringbuffer = malloc(log_buf_len);
+	ringbuffer = malloc(vmcore->log_buf_len);
 	if (ringbuffer == NULL) {
 		fprintf(stderr, "%s Can not allocate memory.\n", estr);
 		goto ERROR_CLOSE;
 	}
-	memset(ringbuffer, 0x00, log_buf_len);
+	memset(ringbuffer, 0x00, vmcore->log_buf_len);
 	
 	/* Calculate Dump address */
 	fprintf(stdout, "%s:  Calculating dump area address.\n", APP_NAME);
-	if ( logged_chars < log_buf_len ) {
+	if ( vmcore->logged_chars < vmcore->log_buf_len ) {
 		/* ring buffer not filled */
-		ringbuffer1_size = logged_chars;
+		ringbuffer1_size = vmcore->logged_chars;
 		if (elf_search_load_data(vmcore, &phdr_cache,
-		                          log_buf, ringbuffer1_size, &ringbuffer1)) {
+		                         vmcore->log_buf, ringbuffer1_size,
+		                         &ringbuffer1)) {
 			fprintf(stderr, "%s Ring buffer not found in vmcore.\n", estr);
 			goto ERROR_FREE;
 		}   
@@ -239,7 +234,7 @@ static int crashdmesg(VMCore *vmcore)
 		fprintf(stdout, "%s:  Dump ring buffer.\n", APP_NAME);
 		fprintf(stdout,
 		        ">>>>>>>>>>[ START kernel ring buffer ]>>>>>>>>>>>>>>>>>\n");
-		for (loop = 0; loop < logged_chars; loop++) {
+		for (loop = 0; loop < ringbuffer1_size; loop++) {
 		     fputc(ringbuffer[loop], stdout);
 		}
 		fprintf(stdout,
@@ -247,17 +242,19 @@ static int crashdmesg(VMCore *vmcore)
 	}
 	else {
 		/* ring buffer filled  */
-		ringbuffer1_size = log_buf_len - (log_end & (log_buf_len-1));
-		ringbuffer2_size = log_end & (log_buf_len-1);
-		if ( ((ringbuffer1_size + ringbuffer2_size) != log_buf_len) ||
+		ringbuffer1_size = vmcore->log_buf_len -
+		                   (vmcore->log_end & (vmcore->log_buf_len-1));
+		ringbuffer2_size = vmcore->log_end & (vmcore->log_buf_len-1);
+		if ( ((ringbuffer1_size + ringbuffer2_size) != vmcore->log_buf_len) ||
 		     ((ringbuffer1_size + ringbuffer2_size) > MAX_LOGBUF_LIMIT) ) {
 			fprintf(stderr, "%s Dump area size calculation failed.\n", estr);
 			goto ERROR_FREE;
 		}
 		if (elf_search_load_data(vmcore, &phdr_cache,
-		                         log_buf + (log_end & (log_buf_len-1)),
+		                         vmcore->log_buf +
+			                     (vmcore->log_end & (vmcore->log_buf_len-1)),
 		                         ringbuffer1_size, &ringbuffer1) ||
-		    elf_search_load_data(vmcore, &phdr_cache, log_buf,
+		    elf_search_load_data(vmcore, &phdr_cache, vmcore->log_buf,
 		                         ringbuffer2_size, &ringbuffer2)) {
 			fprintf(stderr, "%s Ring buffer not found in vmcore.\n", estr);
 			goto ERROR_FREE;
@@ -283,7 +280,7 @@ static int crashdmesg(VMCore *vmcore)
 		fprintf(stdout, "%s:  Dump ring buffer.\n", APP_NAME);
 		fprintf(stdout,
 		        ">>>>>>>>>>[ START kernel ring buffer ]>>>>>>>>>>>>>>>>>\n");
-		for (loop = 0; loop < log_buf_len; loop++) {
+		for (loop = 0; loop < ringbuffer1_size + ringbuffer2_size ; loop++) {
 			fputc(ringbuffer[loop], stdout);
 		}
 		fprintf(stdout,

@@ -34,7 +34,7 @@
 
 #define APP_NAME "crashdmesg"
 #define APP_FULLNAME "VMCore Kernel Ring Buffer Dumper"
-#define APP_VERSION "0.9.1"
+#define APP_VERSION "0.9.2"
 
 #define DEFAULT_VMCORE "/proc/vmcore"
 #define MAX_LOGBUF_LIMIT 1048576 /* 1MB */
@@ -66,7 +66,7 @@ typedef struct {
 	size_t osrelease_size; /* osrelease real size */
 	time_t crashtime; /* CRASHTIME value [sec] */
 	uint64_t log_buf; /* log_buf [virtual address] */
-	uint64_t log_end; /* log_end [virtual address] */
+	uint32_t log_end; /* log_end [virtual address] */
 	int32_t log_buf_len; /* log_buf_len [size] */
 	uint32_t logged_chars; /* logged_chars [size] */
 } VMCore;
