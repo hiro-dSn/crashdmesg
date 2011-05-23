@@ -66,7 +66,8 @@ typedef struct {
 	size_t osrelease_size; /* osrelease real size */
 	time_t crashtime; /* CRASHTIME value [sec] */
 	uint64_t log_buf; /* log_buf [virtual address] */
-	uint32_t log_end; /* log_end [virtual address] */
+	uint32_t log_end; /* log_end [size]
+	                     Value may be larger than log_buf_len. */
 	int32_t log_buf_len; /* log_buf_len [size] */
 	uint32_t logged_chars; /* logged_chars [size] */
 } VMCore;
