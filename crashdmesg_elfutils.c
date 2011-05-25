@@ -135,7 +135,7 @@ static int elf_search_vmcoreinfo(VMCore *vmcore,
 			if ((*size <= 0) ||
 			    (*offset < note_offset) ||
 			    (*offset >= note_offset + note_size) ||
-			    (*offset + *size >= note_offset + note_size)) {
+			    (*offset + *size > note_offset + note_size)) {
 				fprintf(stderr, "%s VMCOREINFO found, but invalid.\n", estr);
 				*offset = 0;
 				*size = 0;
